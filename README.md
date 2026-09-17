@@ -39,19 +39,16 @@ This folder contains the final submission for the customer churn prediction assi
 2. Start the API:
    uvicorn app:app --reload --host 0.0.0.0 --port 8000
 
-3. Test the API:
+3. Test the API, in new terminal:
    curl -X POST http://127.0.0.1:8000/predict -H "Content-Type: application/json" -d @sample_request.json
 
 ## Expected response
 
-{
-  "prediction": "Yes",
-  "churn_probability": 0.82
-}
-
 The response must contain exactly:
 - prediction
 - churn_probability
+
+[GitHub repository](https://github.com/Siddharth77/telecom-customer)
 
 ## Notes
 
