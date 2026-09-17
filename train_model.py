@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
@@ -31,6 +33,34 @@ if not DATA_PATH.exists():
     raise FileNotFoundError(f'Dataset not found at {DATA_PATH}. Please ensure the file is copied into the data folder.')
 
 
+SERVICE_COLS = [
+    'PhoneService',
+    'OnlineSecurity',
+    'OnlineBackup',
+    'DeviceProtection',
+    'TechSupport',
+    'StreamingTV',
+    'StreamingMovies',
+]
+
+
+def service_indicator(value: object) -> int:
+    normalized = str(value).strip().lower()
+    if normalized in {'yes', '1', 'true'}:
+        return 1
+    if normalized in {'no', '0', 'false', 'no phone service', 'no internet service', 'nan', 'none'}:
+        return 0
+    return 0
+
+
+def add_business_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    service_values = df[SERVICE_COLS].apply(lambda column: column.map(service_indicator)).astype(int)
+    df['has_multiple_services'] = (service_values.sum(axis=1) > 1).astype(int)
+    df['charges_per_tenure'] = df['MonthlyCharges'] / df['tenure'].replace(0, 1)
+    return df
+
+
 def add_engineered_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df['TotalCharges'] = pd.to_numeric(df['TotalCharges'], errors='coerce')
@@ -41,21 +71,7 @@ def add_engineered_features(df: pd.DataFrame) -> pd.DataFrame:
         labels=['0-12', '13-24', '25-48', '48+'],
         right=False,
     )
-
-    service_cols = [
-        'PhoneService',
-        'OnlineSecurity',
-        'OnlineBackup',
-        'DeviceProtection',
-        'TechSupport',
-        'StreamingTV',
-        'StreamingMovies',
-    ]
-    service_map = {'Yes': 1, 'No': 0, 'No phone service': 0, 'No internet service': 0}
-    service_values = df[service_cols].replace(service_map).astype(int)
-    df['has_multiple_services'] = (service_values.sum(axis=1) > 1).astype(int)
-    df['charges_per_tenure'] = df['MonthlyCharges'] / df['tenure'].replace(0, 1)
-    return df
+    return add_business_features(df)
 
 
 def load_and_prepare_data() -> pd.DataFrame:
@@ -68,6 +84,7 @@ def prepare_customer_record(raw_record: dict) -> dict:
     record = dict(raw_record)
     record['TotalCharges'] = pd.to_numeric(record.get('TotalCharges', 0), errors='coerce')
     record['MonthlyCharges'] = pd.to_numeric(record.get('MonthlyCharges', 0), errors='coerce')
+    record['tenure'] = int(record.get('tenure', 0) or 0)
     record['tenure_bucket'] = pd.cut(
         [record.get('tenure', 0)],
         bins=[0, 12, 24, 48, np.inf],
@@ -75,22 +92,8 @@ def prepare_customer_record(raw_record: dict) -> dict:
         right=False,
     )[0]
 
-    service_cols = [
-        'PhoneService',
-        'OnlineSecurity',
-        'OnlineBackup',
-        'DeviceProtection',
-        'TechSupport',
-        'StreamingTV',
-        'StreamingMovies',
-    ]
     record['has_multiple_services'] = int(
-        sum(
-            1
-            for col in service_cols
-            if str(record.get(col, 'No')).lower() in {'yes', '1', 'true', 'no internet service'}
-        )
-        > 1
+        sum(service_indicator(record.get(col, 'No')) for col in SERVICE_COLS) > 1
     )
     record['charges_per_tenure'] = float(record.get('MonthlyCharges', 0) / max(record.get('tenure', 1), 1))
     return record
@@ -137,6 +140,22 @@ def evaluate_model(pipe: Pipeline, X_test: pd.DataFrame, y_test: pd.Series, name
     return metrics
 
 
+def build_business_insights(df: pd.DataFrame) -> list[str]:
+    churn_share = df['Churn'].value_counts(normalize=True).mul(100)
+    contract_churn = df.groupby('Contract')['Churn'].apply(lambda values: (values == 'Yes').mean()).mul(100)
+    internet_churn = df.groupby('InternetService')['Churn'].apply(lambda values: (values == 'Yes').mean()).mul(100)
+    tenure_churn = df.groupby('tenure_bucket', observed=False)['Churn'].apply(lambda values: (values == 'Yes').mean()).mul(100)
+    payment_churn = df.groupby('PaymentMethod')['Churn'].apply(lambda values: (values == 'Yes').mean()).mul(100)
+
+    return [
+        f"Churn is imbalanced: {churn_share['Yes']:.1f}% of customers leave, so recall matters more than raw accuracy.",
+        f"Month-to-month customers churn the most at {contract_churn.get('Month-to-month', 0):.1f}%, making contract type a strong retention signal.",
+        f"Fiber optic customers show the highest churn among internet segments at {internet_churn.max():.1f}%, suggesting service experience or price sensitivity.",
+        f"Customers in the first tenure bucket (0-12 months) churn at {tenure_churn.get('0-12', 0):.1f}%, so early-life retention offers are likely to pay off.",
+        f"The highest-risk payment method is {payment_churn.idxmax()} at {payment_churn.max():.1f}% churn, which can help target billing-related interventions.",
+    ]
+
+
 def main():
     df = load_and_prepare_data()
     X = df.drop(columns=['customerID', 'Churn'])
@@ -151,13 +170,22 @@ def main():
     )
 
     models = [
-        ('tree_depth_3', DecisionTreeClassifier(max_depth=3, random_state=42)),
-        ('tree_depth_4', DecisionTreeClassifier(max_depth=4, random_state=42)),
-        ('tree_depth_5', DecisionTreeClassifier(max_depth=5, random_state=42)),
-        ('tree_depth_5_leaf', DecisionTreeClassifier(max_depth=5, min_samples_leaf=10, random_state=42)),
-        ('tree_depth_6', DecisionTreeClassifier(max_depth=6, random_state=42)),
-        ('tree_depth_6_balanced', DecisionTreeClassifier(max_depth=6, class_weight='balanced', random_state=42)),
-        ('tree_depth_8_balanced', DecisionTreeClassifier(max_depth=8, class_weight='balanced', random_state=42)),
+        (
+            'logistic_regression_balanced',
+            LogisticRegression(max_iter=1000, class_weight='balanced', solver='liblinear', random_state=42),
+        ),
+        ('decision_tree_balanced', DecisionTreeClassifier(max_depth=6, class_weight='balanced', random_state=42)),
+        (
+            'random_forest_balanced',
+            RandomForestClassifier(
+                n_estimators=300,
+                max_depth=8,
+                min_samples_leaf=5,
+                class_weight='balanced',
+                random_state=42,
+                n_jobs=-1,
+            ),
+        ),
     ]
 
     results = []
@@ -193,17 +221,39 @@ def main():
     notebook_dir.mkdir(exist_ok=True, parents=True)
 
     plt.figure(figsize=(12, 4))
-    sns.countplot(data=df, x='Churn', palette='Set2')
+    sns.countplot(data=df, x='Churn', hue='Churn', palette='Set2', legend=False)
     plt.title('Churn Distribution')
     plt.tight_layout()
     plt.savefig(notebook_dir / 'churn_distribution.png', dpi=200)
     plt.close()
 
     plt.figure(figsize=(12, 4))
-    sns.boxplot(data=df, x='Churn', y='MonthlyCharges', palette='Set2')
+    sns.boxplot(data=df, x='Churn', y='MonthlyCharges', hue='Churn', palette='Set2', legend=False)
     plt.title('Monthly Charges by Churn Status')
     plt.tight_layout()
     plt.savefig(notebook_dir / 'monthly_charges_by_churn.png', dpi=200)
+    plt.close()
+
+    plt.figure(figsize=(12, 5))
+    sns.countplot(data=df, x='Contract', hue='Churn', palette='Set2')
+    plt.title('Churn by Contract Type')
+    plt.xticks(rotation=15)
+    plt.tight_layout()
+    plt.savefig(notebook_dir / 'contract_type_by_churn.png', dpi=200)
+    plt.close()
+
+    plt.figure(figsize=(12, 5))
+    sns.countplot(data=df, x='InternetService', hue='Churn', palette='Set2')
+    plt.title('Churn by Internet Service')
+    plt.tight_layout()
+    plt.savefig(notebook_dir / 'internet_service_by_churn.png', dpi=200)
+    plt.close()
+
+    plt.figure(figsize=(12, 5))
+    sns.countplot(data=df, x='tenure_bucket', hue='Churn', palette='Set2')
+    plt.title('Churn by Tenure Bucket')
+    plt.tight_layout()
+    plt.savefig(notebook_dir / 'tenure_bucket_by_churn.png', dpi=200)
     plt.close()
 
     print('Created summary EDA plots in notebook/')
@@ -215,6 +265,14 @@ def main():
         'churn_counts': df['Churn'].value_counts().to_dict(),
         'best_model': best_name,
         'metrics': best_metrics,
+        'visualizations': [
+            'churn_distribution.png',
+            'monthly_charges_by_churn.png',
+            'contract_type_by_churn.png',
+            'internet_service_by_churn.png',
+            'tenure_bucket_by_churn.png',
+        ],
+        'business_insights': build_business_insights(df),
     }
     summary_path.write_text(json.dumps(summary, indent=2))
 

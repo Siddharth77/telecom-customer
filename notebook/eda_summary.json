@@ -7,12 +7,26 @@
     "No": 5174,
     "Yes": 1869
   },
-  "best_model": "tree_depth_6_balanced",
+  "best_model": "decision_tree_balanced",
   "metrics": {
-    "model": "tree_depth_6_balanced",
+    "model": "decision_tree_balanced",
     "accuracy": 0.7397065783246569,
     "precision": 0.5060908084163898,
     "recall": 0.8146167557932263,
     "f1": 0.6243169398907104
-  }
+  },
+  "visualizations": [
+    "churn_distribution.png",
+    "monthly_charges_by_churn.png",
+    "contract_type_by_churn.png",
+    "internet_service_by_churn.png",
+    "tenure_bucket_by_churn.png"
+  ],
+  "business_insights": [
+    "Churn is imbalanced: 26.5% of customers leave, so recall matters more than raw accuracy.",
+    "Month-to-month customers churn the most at 42.7%, making contract type a strong retention signal.",
+    "Fiber optic customers show the highest churn among internet segments at 41.9%, suggesting service experience or price sensitivity.",
+    "Customers in the first tenure bucket (0-12 months) churn at 48.3%, so early-life retention offers are likely to pay off.",
+    "The highest-risk payment method is Electronic check at 45.3% churn, which can help target billing-related interventions."
+  ]
 }
